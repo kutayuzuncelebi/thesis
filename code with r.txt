@@ -1,0 +1,244 @@
+library(readxl)
+d <- read_excel("C:/Users/Kutay/Desktop/d.xlsx")
+View(d)
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+lapply(c("fpp2","dplyr","tibble","tidyr","ggplot2","formattable","forecast","nnfor","xts","zoo","lubridate","readxl","xlsx"), require, character.only = TRUE)
+
+library(tseries)
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+dts <- ts(data = d$kur,
+              start = c(2005, 01),
+              end = c(2020, 19),
+              frequency = 52)
+---------------------------------------------------------------------------
+autoplot(dts) +
+     ggtitle("DOLAR ALIŞ KURU") +
+     xlab("HAFTALIK") +
+     ylab("KUR")+
+ geom_point(color="red")
+
+ggseasonplot(x = dts,
+             year.labels = TRUE) +
+  ylab("KUR") +
+  ggtitle("DOLAR ALIŞ KURU")
+
+ggsubseriesplot(x = dts) +
+     ylab("KUR") +
+     ggtitle("DOLAR ALIŞ KURU Mevsimsel Alt Seri Grafiği")
+
+
+--------------------------------------------------------------------------------------
+---------------------------------------------------------------------------
+
+Model_SES <- tsCV(dts, ses, h = 15)
+train_ts <- window(dts, 2005, c(2012,52))
+test_ts <- window(dts, 2013, c(2020,19))
+SES <- ses(train_ts, h = 15)
+accuracy(SES, test_ts)
+
+------------------------
+Basit Üstel Düzeltme
+
+ses.d <- ses(train_ts, alpha = .2, h = 15) // h=100 ile 100 adım ileri tahmin ediyoruz ++ tahminlerimizin, geleceğe yönelik düz bir tahmin öngördüğünü görüyoruz ki bu verilerdeki olumlu eğilimi yakalamıyor. Bu nedenle SES, trend veya mevsimsel bileşen içeren verilerde kullanılmamalıdır.
+autoplot(ses.d)
+
+---------------------------
+d.dif <- diff(train_ts) // Bunu düzeltmek için bir yaklaşım, eğilimi kaldırmak için verilerimizi farklılaştırmaktır. Şimdi, d.dif dolar fiyatında bir önceki günkü değişimi temsil ediyor.
+autoplot(d.dif)
+----------------------------------
+
+ses.d.dif <- ses(d.dif, alpha = .2, h = 15) // Farklılaştıktan sonra eğilimi verilerimizden etkili bir şekilde kaldırdık ve SES modelini yeniden uygulayabiliriz.
+autoplot(ses.d.dif)
+---------------------
+d.dif.test <- diff(test_ts)
+accuracy(ses.d.dif, d.dif.test) // Modelimizde α=0.20 standardını kullandık ancak, tahmin hatasını azaltan değeri belirlemek için alfa parametremizi ayarlayabiliriz. Burada 0.01-0.99'dan alfa değerleri arasında dolaşıyoruz ve test RMSE'imizi en aza indiren seviyeyi tespit ediyoruz. Çıkıyor 
+α =(BUNU KENDİN BUL) tahmin hatamızı en aza indirir.
+----------------------------------
+
+alpha <- seq(.01, .99, by = .01)
+RMSE <- NA
+for(i in seq_along(alpha)) {
+  fit <- ses(d.dif, alpha = alpha[i], h = 15)
+  RMSE[i] <- accuracy(fit, d.dif.test)[2,2]
+}
+
+alpha.fit <- data_frame(alpha, RMSE)
+alpha.min <- filter(alpha.fit, RMSE == min(RMSE))
+
+ggplot(alpha.fit, aes(alpha, RMSE)) +
+  geom_line() +
+  geom_point(data = alpha.min, aes(alpha, RMSE), size = 2, color = "blue") // EN AZ HATA DEĞERİNİ BULDUK a= 0.47
+
+-------------
+ses.d.opt <- ses(d.dif, alpha = .46, h = 16)
+accuracy(ses.d.opt, d.dif.test)
+
+p1 <- autoplot(ses.d.opt) +
+  theme(legend.position = "bottom")
+p2 <- autoplot(d.dif.test) +
+  autolayer(ses.d.opt, alpha = .59) +
+  ggtitle("Predicted vs. actuals for the test data set")
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)// Şimdi SES'i α = 0.59 ile yeniden sığdırabiliriz. Performans metriklerimiz α = 0.20 olan modelimizden önemli lçüde farklı değil; ancak, tahmin edilen güven aralıklarının daha dar olduğunu göreceksiniz (soldaki grafik). Ve öngörülen gerçeklere (sağ çizelge) yakınlaştırdığımızda, çoğu gözlem için tahmin edilen güven aralıklarımızın iyi olduğunu görüyorsunuz.
+library(gridExtra)
+
+-------------------------------------------------------------------------------------------------------------------------
+Holt Yöntemi
+
+holt.d <- holt(train_ts, h=15)
+
+holt.d1 <- holt(train_ts, damped=TRUE, phi = 0.9, h=15)
+
+ // dolar verilerimize geri dönersek, Holt'un yöntemini aşağıdaki şekilde uygulayabiliriz. Burada α'yı manuel olarak ayarlamayacağız ve  β ilk modelimiz için ve h = 100 ile 100 adım ileri tahmin ediyoruz. Tahminimizin artık verilerdeki olumlu eğilimi akalamak için daha iyi bir iş yaptığını görüyoruz.
+autoplot(holt.d)
+autoplot(holt.d1)
+
+holt.d$model // İçinde α'yı holt manuel olarak ayarlayabilirsiniz ve  β parametreler; ancak, bu parametreleri NULL olarak bırakırsanız, holtişlev aslında en uygun model parametrelerini tanımlar. Bunu AIC ve BIC değerlerini minimize ederek yapar. Tarafından seçilen modeli görebiliriz holt. Bu durumda, α = 0.9999 günlük hareketlerde hızlı öğrenme anlamına gelir ve β = 0.0054 bu trend için yavaş öğrenme anlamına gelir.
+
+accuracy(holt.d, test_ts)
+accuracy(holt.d1, test_ts) // Modelimizin tahmini doğruluğunu kontrol edelim. MAPE'ye göre yaklaşık% 3.4'lik bir hata oranına sahibiz.
+SES'e benzer şekilde, β parametresini tahmin etmemizi sağlayabiliriz. holt İşlev optimal tanımlanan p = 0.0001; ancak bu optimal değer, test setindeki tahmin hatalarını en aza indirmeyecek şekilde egzersiz setindeki hataları en aza indirmeye dayanır. Şimdi bir ticaret alanını değerlendirelim β ve tahmin edici bir doğruluk kazanıp kazanmadığımızı görün. Burada, bir dizi β 0.0001'den 0.5'e kadar olan değerler. RMSE'de 0.0601'de bir düşüş olduğunu görüyoruz.
+--------------------------------------------------
+beta <- seq(.0001, .99, by = .001)
+RMSE <- NA
+for(i in seq_along(beta)) {
+  fit <- holt(train_ts, beta = beta[i], h = 15)
+  RMSE[i] <- accuracy(fit, test_ts)[2,2]
+}
+
+beta.fit <- data_frame(beta, RMSE)
+beta.min <- filter(beta.fit, RMSE == min(RMSE))
+
+ggplot(beta.fit, aes(beta, RMSE)) +
+  geom_line() +
+  geom_point(data = beta.min, aes(beta, RMSE), size = 2, color = "blue")  
+
+beta.min // a= 0.386 min değer hata için . + Modelimizin tahmini doğruluğunu kontrol edelim. MAPE'ye göre yaklaşık% 3.4'lik bir hata oranına sahibiz.
+SES'e benzer şekilde, β parametresini tahmin etmemizi sağlayabiliriz. holt İşlev optimal tanımlanan p = 0.0001; ancak bu optimal değer, test setindeki tahmin hatalarını en aza indirmeyecek şekilde egzersiz setindeki hataları en aza indirmeye dayanır. Şimdi bir ticaret alanını değerlendirelim β ve tahmin edici bir doğruluk kazanıp kazanmadığımızı görün. Burada, bir dizi β 0.0001'den 0.5'e kadar olan değerler. RMSE'de 0.0601'de bir düşüş olduğunu görüyoruz.
+----------------------------------------------
+holt.d.opt <- holt(train_ts, h = 15, beta = 0.386) h=10için dene 
+holt.d1.opt <- holt(train_ts, damped=TRUE, phi = 0.9, h=15, beta=0.47)
+accuracy(holt.d, test_ts) mape = 3.415006
+accuracy(holt.d1, test_ts)
+accuracy(holt.d.opt, test_ts)
+accuracy(holt.d1.opt, test_ts)
+ mape = 2.040016  %59  iyileştirme ++ Şimdi modelimizi bu optimum ile yeniden yerleştirelim β bizim tahminimizle olan oğruluk oranımızı orijinal modelimizle karşılaştırın. Yeni modelimizin hata oranımızı (MAPE)% 59,73 kadar düşürdüğünü görüyoruz.
+
+--------------------
+
+p1 <- autoplot(holt.d) +
+  ggtitle("Original Holt's Model") +
+  coord_cartesian(ylim = c(1, 8))
+
+p2 <- autoplot(holt.d.opt) +
+  ggtitle("Optimal Holt's Model") +
+  coord_cartesian(ylim = c(1, 8))
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+---
+p1 <- autoplot(holt.d1) +
+  ggtitle("Original Holt's Model") +
+  coord_cartesian(ylim = c(1, 8))
+
+p2 <- autoplot(holt.d1.opt) +
+  ggtitle("Optimal Holt's Model") +
+  coord_cartesian(ylim = c(1, 8))
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+
+ // Orijinalimize karşı daha yeni bir optimal model çizersek birkaç şey fark edeceğiz. İlk olarak, optimal model için öngörülen değerlerimiz daha muhafazakardır; diğer bir deyişle, daha kademeli bir eğim üstleniyorlar. İkincisi, güven aralıkları çok daha fazladır. Tahminlerimiz daha doğru olmasına rağmen, belirsizliğimiz artıyor. Bunun nedeni, β daha yeni gözlemlerden daha hızlı öğrenmeyi varsayıyoruz. Son dönemde birazcık türbülans olduğu için bu, tahmin aralıklarımıza daha fazla varyansın dahil edilmesine neden oluyor. Bu, bu öğreticinin gireceğinden daha derinlemesine bir tartışma gerektirmektedir, ancak akılda tutulması gereken önemli olan, parametre ayarlaması ile tahmin doğruluğumuzu artırmamıza rağmen, ortaya çıkabilecek ek yan etkilerin olması ve kararın açıklanması daha zor olabileceğidir.
+----------------------------------------------------------
+
+Holt-Winters Mevsimsel Yöntemi 
+
+autoplot(decompose(dts1))
+
+d.hw <- ets(train_ts, model = "AAA") // Holt-Winters yöntemini uygulamak etsiçin hata, trend ve mevsimsellik anlamına gelen yeni bir işlev sunacağız. etsModel hakkında anlaşılması gereken önemli şey model =parametrenin nasıl seçileceğidir . Toplamda 36 model seçeneği arasından seçim yapabilirsiniz. Aşağıdaki kod ( model = "AAA") ' daki parametre ayarları, ek hata, ek eğilim ve ek mevsimsellik içeren bir model anlamına gelir.
+autoplot(forecast(d.hw))
+Error in ets(train_ts, model = "AAA") : Frequency too high
+> train_ts2 <- window(dts1, 2019, c(2019,52))
+
+> d.hw2 <- ets(train_ts2, model = "AAA") 
+/// Dolayısıyla, model tipini belirtirken daima hata, eğilim, ardından mevsimsellik (dolayısıyla “ets”) belirlersiniz. Her bileşen için belirtebileceğiniz seçenekler aşağıdaki gibidir:
+
+
+hata : katkı maddesi (“A”), çarpımsal (“M”), bilinmiyor (“Z”)
+
+eğilim : yok (“N”), katkı maddesi (“A”), çarpımsal (“M”), bilinmiyor (“Z”)
+
+mevsimsellik : yok (“N”), katkı maddesi (“A”), çarpımsal (“M”), bilinmiyor (“Z”)
+
+Sonuç olarak, bir Holt modelinin hatanın ve eğilimin katkısı olduğu ve mevsimsellik olmadığı bir model uygulamak isterseniz, seçersiniz model = "AAN". Seçeceğiniz bir ek hata, üstel (çarpımsal) eğilim ve ek mevsimselliğin olduğu bir Holt-Winters modeli uygulamak istiyorsanız model = "AMA". Bileşenin türünden emin değilseniz “Z” kullanın. Bileşenlerden emin değilseniz veya modelin en iyi seçeneği belirlemesini istiyorsanız, kullanabilirsiniz model = "ZZZ"ve “en uygun” model seçilecektir.
+
+summary(d.hw2)
+checkresiduals(d.hw2)
+qcement.f1 <- forecast(d.hw2, h = 5)
+accuracy(qcement.f1, test_ts) Tahmin doğruluğunu kontrol edersek, tahmin doğruluğumuzun yaklaşık% 0.6 olduğunu görüyoruz (MAPE'ye göre).
+
+# additive error, trend and seasonality
+qcement.hw1 <- ets(train_ts2, model = "AAA")
+qcement.f1 <- forecast(qcement.hw1, h = 5)
+accuracy(qcement.f1, test_ts)
+ME       RMSE        MAE       MPE      MAPE MASE      ACF1 Theil's U
+Training set 0.006456942 0.06682416 0.05441450 0.1143638 0.9592648  NaN 0.2413478        NA
+Test set     0.015705732 0.04203243 0.04043993 0.2625286 0.6831051  NaN 0.3360437 0.9664712
+
+# multiplicative error, additive trend and seasonality
+qcement.hw2 <- ets(train_ts2, model = "MAA")
+qcement.f2 <- forecast(qcement.hw2, h = 5)
+accuracy(qcement.f2, test_ts)
+ME       RMSE        MAE         MPE      MAPE MASE       ACF1 Theil's U
+Training set  0.004655396 0.06674210 0.05257782  0.08462885 0.9267944  NaN 0.07642811        NA
+Test set     -0.033471215 0.06398682 0.04950531 -0.56930144 0.8396432  NaN 0.42140900  1.714173
+
+
+# additive error and trend and multiplicative seasonality
+qcement.hw3 <- ets(train_ts2, model = "AAM", restrict = FALSE)
+qcement.f3 <- forecast(qcement.hw3, h = 5)
+accuracy(qcement.f3,test_ts)
+ME       RMSE        MAE       MPE      MAPE MASE      ACF1 Theil's U
+Training set 0.006456942 0.06682416 0.05441450 0.1143638 0.9592648  NaN 0.2413478        NA
+Test set     0.015705732 0.04203243 0.04043993 0.2625286 0.6831051  NaN 0.3360437 0.9664712
+
+
+# multiplicative error, additive trend, and multiplicative seasonality
+qcement.hw4 <- ets(train_ts2, model = "MAM")
+qcement.f4 <- forecast(qcement.hw4, h = 5)
+accuracy(qcement.f4, test_ts)
+ME       RMSE        MAE         MPE      MAPE MASE       ACF1 Theil's U
+Training set  0.004655396 0.06674210 0.05257782  0.08462885 0.9267944  NaN 0.07642811        NA
+Test set     -0.033471215 0.06398682 0.04950531 -0.56930144 0.8396432  NaN 0.42140900  1.714173
+
+qcement.hw5 <- ets(qcement.train, model = "ZZZ")
+summary(qcement.hw5)
+
+
+-----------------------------------------
+örnek bir çalışma
+
+# holt's linear (additive) model
+fit1 <- ets(ausair, model = "ZAN", alpha = 0.8, beta = 0.2)
+pred1 <- forecast(fit1, h = 5)
+
+# holt's linear (additive) model
+fit2 <- ets(ausair, model = "ZAN", damped = TRUE, alpha = 0.8, beta = 0.2, phi = 0.85)
+pred2 <- forecast(fit2, h = 5)
+
+# holt's exponential (multiplicative) model
+fit3 <- ets(ausair, model = "ZMN", alpha = 0.8, beta = 0.2)
+pred3 <- forecast(fit3, h = 5)
+
+# holt's exponential (multiplicative) model damped
+fit4 <- ets(ausair, model = "ZMN", damped = TRUE, alpha = 0.8, beta = 0.2, phi = 0.85)
+pred4 <- forecast(fit4, h = 5)
+
+autoplot(ausair) +
+  autolayer(pred1$mean, color = "blue") +
+  autolayer(pred2$mean, color = "blue", linetype = "dashed") +
+  autolayer(pred3$mean, color = "red") +
+  autolayer(pred4$mean, color = "red", linetype = "dashed")
+
+
+
+
